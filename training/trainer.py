@@ -34,6 +34,9 @@ class MicroO1Trainer:
         # PPO trainer
         self.ppo_trainer = PPOTrainer(model)
         
+        # Add storage for previous outputs
+        self.old_outputs = None
+        
     def prepare_batch(self, batch: Dict) -> Tuple[torch.Tensor, torch.Tensor]:
         """Prepare a batch of data for training"""
         # Tokenize input and target
@@ -51,7 +54,12 @@ class MicroO1Trainer:
             return_tensors="pt"
         ).to(self.device)
         
-        return inputs, targets
+        # Generate PPO inputs
+        actions = torch.zeros_like(inputs["input_ids"])  # Placeholder actions
+        rewards = torch.ones_like(inputs["input_ids"]).float()  # Placeholder rewards
+        masks = inputs["attention_mask"]  # Use attention mask as sequence mask
+        
+        return inputs, targets, actions, rewards, masks
         
     def train_step(self, batch: Dict) -> Dict[str, float]:
         """Single training step"""
@@ -59,13 +67,18 @@ class MicroO1Trainer:
         self.optimizer.zero_grad()
         
         # Prepare data
-        inputs, targets = self.prepare_batch(batch)
+        inputs, targets, actions, rewards, masks = self.prepare_batch(batch)
         
         # Forward pass
         outputs = self.model(
             input_ids=inputs["input_ids"],
             attention_mask=inputs["attention_mask"]
         )
+        
+        # Store current outputs for next iteration if no previous outputs exist
+        if self.old_outputs is None:
+            self.old_outputs = {k: v.detach() for k, v in outputs.items()}
+            return {"total_loss": 0.0}  # Skip first iteration
         
         # Calculate losses
         token_loss = self.token_criterion(
@@ -85,8 +98,8 @@ class MicroO1Trainer:
         ppo_losses = self.ppo_trainer.compute_ppo_loss(
             outputs["policy_logits"],
             outputs["values"],
-            old_outputs["policy_logits"].detach(),
-            old_outputs["values"].detach(),
+            self.old_outputs["policy_logits"].detach(),
+            self.old_outputs["values"].detach(),
             actions,
             rewards,
             masks
@@ -97,6 +110,9 @@ class MicroO1Trainer:
         # Backward pass
         loss.backward()
         self.optimizer.step()
+        
+        # Update old outputs for next iteration
+        self.old_outputs = {k: v.detach() for k, v in outputs.items()}
         
         return {
             "token_loss": token_loss.item(),
