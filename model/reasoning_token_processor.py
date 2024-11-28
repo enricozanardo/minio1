@@ -1,3 +1,6 @@
+import torch
+import torch.nn as nn
+
 class ReasoningTokenProcessor(nn.Module):
     def __init__(self, hidden_size: int, vocab_size: int):
         super().__init__()
