@@ -33,10 +33,23 @@ class ChainOfThoughtModule(nn.Module):
             ),
             num_layers=2
         )
+        
+        # Add reasoning path tracker
+        self.reasoning_paths = []
+        self.path_scores = []
     
+    def decode_reasoning_step(self, 
+                            step_output: torch.Tensor,
+                            tokenizer) -> str:
+        """Decode a reasoning step into text"""
+        logits = self.step_generator.output_projection(step_output)
+        tokens = torch.argmax(logits, dim=-1)
+        return tokenizer.decode(tokens)
+        
     def forward(self, 
                 hidden_states: torch.Tensor,
-                attention_mask: Optional[torch.Tensor] = None) -> Dict[str, torch.Tensor]:
+                attention_mask: Optional[torch.Tensor] = None,
+                tokenizer = None) -> Dict[str, torch.Tensor]:
         batch_size = hidden_states.size(0)
         
         # Generate reasoning steps
@@ -65,7 +78,19 @@ class ChainOfThoughtModule(nn.Module):
         else:
             composed_reasoning = hidden_states
             
+        # Track reasoning paths if tokenizer provided
+        if tokenizer is not None:
+            self.reasoning_paths = []
+            self.path_scores = []
+            
+            for step, score in zip(steps, step_scores):
+                decoded_step = self.decode_reasoning_step(step, tokenizer)
+                self.reasoning_paths.append(decoded_step)
+                self.path_scores.append(score.item())
+        
         return {
             "reasoning_states": composed_reasoning,
-            "step_scores": torch.stack(step_scores) if step_scores else None
+            "step_scores": torch.stack(step_scores) if step_scores else None,
+            "reasoning_paths": self.reasoning_paths,
+            "path_scores": self.path_scores
         } 
