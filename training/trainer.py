@@ -6,6 +6,7 @@ from typing import Dict, Tuple
 import torch
 
 from model.micro_o1 import MicroO1
+from model.ppo_trainer import PPOTrainer
 
 class MicroO1Trainer:
     def __init__(self,
@@ -29,6 +30,9 @@ class MicroO1Trainer:
         # Loss functions
         self.token_criterion = nn.CrossEntropyLoss()
         self.reasoning_criterion = nn.BCEWithLogitsLoss()
+        
+        # PPO trainer
+        self.ppo_trainer = PPOTrainer(model)
         
     def prepare_batch(self, batch: Dict) -> Tuple[torch.Tensor, torch.Tensor]:
         """Prepare a batch of data for training"""
@@ -76,6 +80,19 @@ class MicroO1Trainer:
         
         # Combined loss
         loss = token_loss + 0.1 * reasoning_loss
+        
+        # Add PPO training step
+        ppo_losses = self.ppo_trainer.compute_ppo_loss(
+            outputs["policy_logits"],
+            outputs["values"],
+            old_outputs["policy_logits"].detach(),
+            old_outputs["values"].detach(),
+            actions,
+            rewards,
+            masks
+        )
+        
+        loss = loss + ppo_losses["total_loss"]
         
         # Backward pass
         loss.backward()

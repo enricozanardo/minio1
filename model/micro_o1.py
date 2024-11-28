@@ -2,6 +2,8 @@ import torch
 import torch.nn as nn
 from typing import Dict, Optional, List, Tuple
 from .transformer_layer import TransformerLayerWithReasoning
+from .cot_module import ChainOfThoughtModule
+from .rl_module import RLModule
 
 
 
@@ -51,6 +53,11 @@ class MicroO1(nn.Module):
             "position_ids",
             torch.arange(max_seq_length).expand((1, -1))
         ) 
+        
+        # Add CoT and RL modules
+        self.cot_module = ChainOfThoughtModule(hidden_size)
+        self.rl_module = RLModule(hidden_size)
+        
     def forward(self,
                input_ids: torch.Tensor,
                attention_mask: Optional[torch.Tensor] = None) -> Dict[str, torch.Tensor]:
@@ -83,8 +90,18 @@ class MicroO1(nn.Module):
         logits = self.token_predictor(hidden_states)
         reasoning_logits = self.reasoning_predictor(hidden_states)
         
+        # Apply Chain of Thought reasoning
+        cot_outputs = self.cot_module(hidden_states, attention_mask)
+        hidden_states = cot_outputs["reasoning_states"]
+        
+        # Apply RL module
+        rl_outputs = self.rl_module(hidden_states)
+        
         return {
             "logits": logits,
             "reasoning_logits": reasoning_logits,
-            "hidden_states": hidden_states
+            "policy_logits": rl_outputs["policy_logits"],
+            "values": rl_outputs["values"],
+            "hidden_states": hidden_states,
+            "cot_scores": cot_outputs["step_scores"]
         } 
