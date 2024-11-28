@@ -4,6 +4,8 @@ from typing import Dict, Optional, List, Tuple
 from .transformer_layer import TransformerLayerWithReasoning
 from .cot_module import ChainOfThoughtModule
 from .rl_module import RLModule
+from .context_manager import ContextManager
+from .reasoning_token_processor import ReasoningTokenProcessor
 
 
 
@@ -58,6 +60,28 @@ class MicroO1(nn.Module):
         self.cot_module = ChainOfThoughtModule(hidden_size)
         self.rl_module = RLModule(hidden_size)
         
+        # Reasoning token management
+        self.max_reasoning_tokens = 32768  # As per O1 paper
+        self.reasoning_token_ids = {
+            "start": "[REASON]",
+            "step": "[STEP]",
+            "therefore": "[THEREFORE]",
+            "conclude": "[CONCLUDE]",
+            "intermediate": "[INTERMEDIATE]",
+            "verify": "[VERIFY]"
+        }
+        
+        # Context management
+        self.context_size = 128000  # O1's extended context window
+        self.context_compressor = nn.Linear(hidden_size, hidden_size // 4)
+        self.context_expander = nn.Linear(hidden_size // 4, hidden_size)
+        
+        # Context manager
+        self.context_manager = ContextManager(hidden_size, self.context_size)
+        
+        # Reasoning token processor
+        self.reasoning_token_processor = ReasoningTokenProcessor(hidden_size, vocab_size)
+        
     def forward(self,
                input_ids: torch.Tensor,
                attention_mask: Optional[torch.Tensor] = None) -> Dict[str, torch.Tensor]:
@@ -77,6 +101,21 @@ class MicroO1(nn.Module):
         
         # Initialize reasoning mask
         reasoning_mask = torch.zeros_like(attention_mask, dtype=torch.float)
+        
+        # Identify reasoning tokens
+        reasoning_token_mask = torch.isin(
+            input_ids,
+            torch.tensor(list(self.reasoning_token_ids.values()))
+        )
+        
+        # Process context
+        hidden_states = self.context_manager(hidden_states)
+        
+        # Process reasoning tokens
+        hidden_states = self.reasoning_token_processor(
+            hidden_states,
+            reasoning_token_mask
+        )
         
         # Pass through transformer layers
         for layer in self.transformer_layers:
