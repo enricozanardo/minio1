@@ -15,11 +15,15 @@ class MicroO1Trainer:
                  model: MicroO1,
                  tokenizer: PreTrainedTokenizerFast,
                  device: torch.device = None,
-                 batch_size: int = 8):
+                 batch_size: int = 4,
+                 gradient_accumulation_steps: int = 4,
+                 max_length: int = 256):
         self.model = model.to(device)
         self.tokenizer = tokenizer
         self.device = device
         self.batch_size = batch_size
+        self.gradient_accumulation_steps = gradient_accumulation_steps
+        self.max_length = max_length
         
         # Enable mixed precision training for M3
         self.scaler = torch.amp.GradScaler() if device.type in ["cuda", "mps"] else None
@@ -47,10 +51,16 @@ class MicroO1Trainer:
         # Initialize resource monitor
         self.resource_monitor = M3ResourceMonitor()
         
+        # Add memory optimization for MPS
+        if device.type == "mps":
+            torch.mps.empty_cache()
+            import os
+            os.environ['PYTORCH_MPS_HIGH_WATERMARK_RATIO'] = '0.7'
+        
     def prepare_batch(self, batch: Dict) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """Prepare a batch of data for training"""
         # Ensure consistent batch size
-        max_length = 512  # Set a reasonable max length
+        max_length = self.max_length  # Use class max_length
         
         # Tokenize input and target
         inputs = self.tokenizer(
@@ -116,8 +126,9 @@ class MicroO1Trainer:
         
     def train_step(self, batch: Dict) -> Dict[str, float]:
         """Single training step"""
-        self.model.train()
-        self.optimizer.zero_grad()
+        # Only zero gradients after accumulation steps
+        if self.gradient_accumulation_steps == 1:
+            self.optimizer.zero_grad()
         
         # Prepare data
         inputs, targets, actions, rewards, masks = self.prepare_batch(batch)
@@ -180,14 +191,23 @@ class MicroO1Trainer:
             
             loss = loss + ppo_losses["total_loss"]
             
+        # Scale loss by accumulation steps
+        loss = loss / self.gradient_accumulation_steps
+        
         # Scale loss and backward pass for mixed precision
         if self.scaler:
             self.scaler.scale(loss).backward()
-            self.scaler.step(self.optimizer)
-            self.scaler.update()
+            # Only optimize after accumulation steps
+            if (self.current_step + 1) % self.gradient_accumulation_steps == 0:
+                self.scaler.step(self.optimizer)
+                self.scaler.update()
+                self.optimizer.zero_grad()
         else:
             loss.backward()
-            self.optimizer.step()
+            # Only optimize after accumulation steps
+            if (self.current_step + 1) % self.gradient_accumulation_steps == 0:
+                self.optimizer.step()
+                self.optimizer.zero_grad()
         
         # Update old outputs for next iteration
         self.old_outputs = {
@@ -204,12 +224,17 @@ class MicroO1Trainer:
     def train(self, num_epochs: int):
         """Full training loop with resource monitoring"""
         self.resource_monitor.start_monitoring()
+        self.current_step = 0
         
         try:
             for epoch in range(num_epochs):
                 # Convert to list for proper indexing
                 dataset = list(self.dataset["train"].shuffle())
                 for i in range(0, len(dataset), self.batch_size):
+                    # Clear MPS cache periodically
+                    if self.device.type == "mps" and i % 100 == 0:
+                        torch.mps.empty_cache()
+                    
                     # Get batch and ensure it's not empty
                     batch_data = dataset[i:min(i + self.batch_size, len(dataset))]
                     if not batch_data:
@@ -222,6 +247,7 @@ class MicroO1Trainer:
                     }
                     
                     metrics = self.train_step(batch)
+                    self.current_step += 1
                     
                     # Log metrics and resources
                     if i % 100 == 0:

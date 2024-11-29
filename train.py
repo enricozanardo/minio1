@@ -32,7 +32,9 @@ def main():
         model, 
         tokenizer, 
         device=config["device"],
-        batch_size=8  # Adjust this based on your memory constraints
+        batch_size=4,
+        gradient_accumulation_steps=4,
+        max_length=256
     )
     
     logger = MetricsLogger()
