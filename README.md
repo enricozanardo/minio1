@@ -1,9 +1,56 @@
 # MicroO1
 
-This repository contains the implementation of the MicroO1 model, a small and efficient transformer model designed for reasoning tasks. The model is based on the Mixtral architecture and is optimized for performance on CPUs.
+A smaller version of O1 focused on mathematical reasoning, implementing Chain-of-Thought and Reinforcement Learning components.
+
+## Branches
+
+- `main`: Base implementation
+- `mac`: Optimized for Apple Silicon (M1/M2/M3)
+- `gpu`: Optimized for NVIDIA GPUs
+
+## Setup
+
+### For Mac (Apple Silicon)
+
+bash
+git checkout mac
+chmod +x scripts/setup_m3.sh
+./scripts/setup_m3.sh
+```
+### For NVIDIA GPU
+```bash
+git checkout gpu
+chmod +x scripts/setup_gpu.sh
+./scripts/setup_gpu.sh
+```
+
+## Training
+
+### Mac Version
+```bash
+python train.py
+```
+
+### GPU Version
+Single GPU:
+```bash
+python train.py
+```
+Multi GPU:
+```bash
+torchrun --nproc_per_node=NUM_GPUS train.py
+```
 
 ## Features
 
-- **Small and Efficient**: MicroO1 is a compact model that requires minimal computational resources.
-- **Reasoning Capabilities**: The model is designed to perform well on reasoning tasks, including question answering and problem solving.
-- **CPU Optimization**: MicroO1 is optimized for CPUs, making it suitable for deployment in environments with limited computational power.
+- Chain of Thought (CoT) reasoning
+- PPO-based reinforcement learning
+- Mixed precision training
+- Hardware-specific optimizations
+- Extended context window
+- Reasoning token processing
+
+## Requirements
+
+See `requirements.txt` for each branch's specific dependencies.
+
