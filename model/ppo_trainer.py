@@ -24,16 +24,47 @@ class PPOTrainer:
                         actions: torch.Tensor,
                         rewards: torch.Tensor,
                         masks: torch.Tensor) -> Dict[str, torch.Tensor]:
-        # Compute probabilities
-        dist = Categorical(logits=logits)
-        old_dist = Categorical(logits=old_logits)
+        # Get minimum sequence length
+        min_seq_len = min(
+            logits.size(1),
+            values.size(1),
+            old_logits.size(1),
+            old_values.size(1),
+            actions.size(1),
+            rewards.size(1),
+            masks.size(1)
+        )
         
-        # Get log probs
-        log_probs = dist.log_prob(actions)
-        old_log_probs = old_dist.log_prob(actions)
+        # Truncate all tensors to minimum length
+        logits = logits[:, :min_seq_len]
+        values = values[:, :min_seq_len]
+        old_logits = old_logits[:, :min_seq_len]
+        old_values = old_values[:, :min_seq_len]
+        actions = actions[:, :min_seq_len]
+        rewards = rewards[:, :min_seq_len]
+        masks = masks[:, :min_seq_len]
+        
+        # Ensure numerical stability
+        logits = logits.clamp(min=-20, max=20)
+        old_logits = old_logits.clamp(min=-20, max=20)
+        
+        # Make tensors contiguous and reshape
+        values = values.contiguous().reshape(-1)
+        old_values = old_values.contiguous().reshape(-1)
+        rewards = rewards.contiguous().reshape(-1)
+        actions = actions.contiguous()
+        masks = masks.contiguous()
+        
+        # Use log probabilities directly
+        log_probs = logits.gather(-1, actions.unsqueeze(-1)).squeeze(-1)
+        old_log_probs = old_logits.gather(-1, actions.unsqueeze(-1)).squeeze(-1)
+        
+        # Reshape log probs to match advantages
+        log_probs = log_probs.reshape(-1)
+        old_log_probs = old_log_probs.reshape(-1)
         
         # Compute ratio and clipped ratio
-        ratio = (log_probs - old_log_probs).exp()
+        ratio = (log_probs - old_log_probs).clamp(min=-20, max=20).exp()
         clipped_ratio = torch.clamp(ratio, 1 - self.clip_epsilon, 1 + self.clip_epsilon)
         
         # Compute advantages
@@ -50,7 +81,7 @@ class PPOTrainer:
         value_loss = 0.5 * (rewards - values).pow(2).mean()
         
         # Entropy loss
-        entropy_loss = -dist.entropy().mean()
+        entropy_loss = -log_probs.mean()
         
         # Total loss
         total_loss = (

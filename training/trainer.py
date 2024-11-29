@@ -47,7 +47,7 @@ class MicroO1Trainer:
         # Initialize resource monitor
         self.resource_monitor = M3ResourceMonitor()
         
-    def prepare_batch(self, batch: Dict) -> Tuple[torch.Tensor, torch.Tensor]:
+    def prepare_batch(self, batch: Dict) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """Prepare a batch of data for training"""
         # Ensure consistent batch size
         max_length = 512  # Set a reasonable max length
@@ -69,19 +69,44 @@ class MicroO1Trainer:
             return_tensors="pt"
         ).to(self.device)
         
-        # Ensure inputs and targets have the same batch size
+        # Get sequence lengths
+        input_length = inputs["input_ids"].size(1)
+        target_length = targets["input_ids"].size(1)
+        
+        # Use minimum length for consistency
+        seq_len = min(input_length, target_length)
+        
+        # Ensure all tensors have the same batch size
         batch_size = min(inputs["input_ids"].size(0), targets["input_ids"].size(0))
-        inputs = {k: v[:batch_size] for k, v in inputs.items()}
-        targets = {k: v[:batch_size] for k, v in targets.items()}
         
-        # Generate PPO inputs
-        actions = torch.zeros_like(inputs["input_ids"])  # Placeholder actions
-        rewards = torch.ones_like(inputs["input_ids"]).float()  # Placeholder rewards
-        masks = inputs["attention_mask"]  # Use attention mask as sequence mask
+        # Truncate batch size and sequence length
+        inputs = {k: v[:batch_size, :seq_len] for k, v in inputs.items()}
+        targets = {k: v[:batch_size, :seq_len] for k, v in targets.items()}
         
-        # Create reasoning labels (binary classification)
-        reasoning_labels = torch.zeros((batch_size, inputs["input_ids"].size(1), 2), 
-                                     device=self.device)
+        # Generate PPO inputs with consistent length
+        actions = torch.zeros(
+            (batch_size, seq_len),
+            dtype=torch.long,
+            device=self.device
+        ).contiguous()
+        
+        # Randomly initialize actions to 0 or 1
+        actions = torch.randint(0, 2, actions.shape, device=self.device)
+        
+        # Create rewards per token
+        rewards = torch.zeros((batch_size, seq_len), device=self.device).float()
+        # Set reward to 1 only for non-padding tokens
+        rewards[inputs["attention_mask"] == 1] = 1.0
+        
+        masks = inputs["attention_mask"]
+        
+        # Create reasoning labels
+        reasoning_labels = torch.zeros((
+            batch_size,
+            seq_len,
+            2
+        ), device=self.device)
+        
         # Set the first dimension (non-reasoning) to 1 by default
         reasoning_labels[:, :, 0] = 1
         
@@ -97,12 +122,16 @@ class MicroO1Trainer:
         # Prepare data
         inputs, targets, actions, rewards, masks = self.prepare_batch(batch)
         
+        # Create attention mask that covers both input and target
+        attention_mask = torch.ones_like(inputs["input_ids"], device=self.device)
+        attention_mask[inputs["input_ids"] == self.tokenizer.pad_token_id] = 0
+        
         # Use mixed precision where available
         with torch.amp.autocast(device_type=self.device.type) if self.device.type in ["cuda", "mps"] else nullcontext():
             # Forward pass
             outputs = self.model(
                 input_ids=inputs["input_ids"],
-                attention_mask=inputs["attention_mask"]
+                attention_mask=attention_mask
             )
             
             # Store current outputs for next iteration if no previous outputs exist
@@ -113,15 +142,26 @@ class MicroO1Trainer:
                 }
                 return {"total_loss": 0.0}  # Skip first iteration
             
+            # Get sequence length for reshaping
+            batch_size, seq_len = inputs["input_ids"].size()
+            vocab_size = outputs["logits"].size(-1)
+            
+            # Ensure all tensors have the same size
+            logits = outputs["logits"][:batch_size, :seq_len].reshape(-1, vocab_size)
+            target_ids = targets["input_ids"][:batch_size, :seq_len].reshape(-1)
+            
+            reasoning_logits = outputs["reasoning_logits"][:batch_size, :seq_len].reshape(-1, 2)
+            target_labels = targets["reasoning_labels"][:batch_size, :seq_len].reshape(-1, 2)
+            
             # Calculate losses
             token_loss = self.token_criterion(
-                outputs["logits"].view(-1, outputs["logits"].size(-1)),
-                targets["input_ids"].view(-1)
+                logits,
+                target_ids
             )
             
             reasoning_loss = self.reasoning_criterion(
-                outputs["reasoning_logits"].view(-1, 2),
-                targets["reasoning_labels"].view(-1, 2)
+                reasoning_logits,
+                target_labels
             )
             
             # Combined loss
@@ -163,15 +203,24 @@ class MicroO1Trainer:
     
     def train(self, num_epochs: int):
         """Full training loop with resource monitoring"""
-        # Start resource monitoring
         self.resource_monitor.start_monitoring()
         
         try:
             for epoch in range(num_epochs):
-                # Create batches of consistent size
-                dataset = self.dataset["train"].shuffle()
+                # Convert to list for proper indexing
+                dataset = list(self.dataset["train"].shuffle())
                 for i in range(0, len(dataset), self.batch_size):
-                    batch = dataset[i:i + self.batch_size]
+                    # Get batch and ensure it's not empty
+                    batch_data = dataset[i:min(i + self.batch_size, len(dataset))]
+                    if not batch_data:
+                        continue
+                        
+                    # Convert list of examples to batch format
+                    batch = {
+                        "question": [item["question"] for item in batch_data],
+                        "answer": [item["answer"] for item in batch_data]
+                    }
+                    
                     metrics = self.train_step(batch)
                     
                     # Log metrics and resources

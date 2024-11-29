@@ -143,11 +143,21 @@ class MicroO1(nn.Module):
         # Apply RL module
         rl_outputs = self.rl_module(hidden_states)
         
+        # Ensure all outputs have same sequence length
+        seq_len = input_ids.size(1)
+        
+        # Make tensors contiguous before reshaping
+        logits = logits[:, :seq_len].contiguous()
+        reasoning_logits = reasoning_logits[:, :seq_len].contiguous()
+        policy_logits = rl_outputs["policy_logits"][:, :seq_len].contiguous()
+        values = rl_outputs["values"][:, :seq_len].contiguous()
+        hidden_states = hidden_states[:, :seq_len].contiguous()
+        
         return {
             "logits": logits,
             "reasoning_logits": reasoning_logits,
-            "policy_logits": rl_outputs["policy_logits"],
-            "values": rl_outputs["values"],
+            "policy_logits": policy_logits,
+            "values": values,
             "hidden_states": hidden_states,
             "cot_scores": cot_outputs["step_scores"]
         } 

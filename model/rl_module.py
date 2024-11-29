@@ -12,7 +12,8 @@ class RLModule(nn.Module):
             nn.GELU(),
             nn.Linear(hidden_size * 2, hidden_size),
             nn.GELU(),
-            nn.Linear(hidden_size, 1)
+            nn.Linear(hidden_size, 2),
+            nn.LogSoftmax(dim=-1)
         )
         
         # Value network
