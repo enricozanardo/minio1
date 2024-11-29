@@ -22,12 +22,15 @@ class ReasoningTokenProcessor(nn.Module):
         # Process reasoning tokens separately
         reasoning_states = hidden_states * reasoning_token_mask.unsqueeze(-1)
         
+        # Reshape mask for attention: (batch_size, seq_len) -> (seq_len, batch_size)
+        key_padding_mask = ~reasoning_token_mask.bool().transpose(0, 1)
+        
         # Apply special attention to reasoning tokens
         reasoned_output, _ = self.reasoning_attention(
             reasoning_states,
             reasoning_states,
             reasoning_states,
-            key_padding_mask=~reasoning_token_mask.bool()
+            key_padding_mask=key_padding_mask
         )
         
         # Combine with regular hidden states

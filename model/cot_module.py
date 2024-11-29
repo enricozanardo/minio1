@@ -14,12 +14,12 @@ class ChainOfThoughtModule(nn.Module):
             input_size=hidden_size,
             hidden_size=hidden_size,
             num_layers=2,
-            bidirectional=True
+            bidirectional=False
         )
         
         # Step verification
         self.step_verifier = nn.Sequential(
-            nn.Linear(hidden_size * 2, hidden_size),
+            nn.Linear(hidden_size, hidden_size),
             nn.GELU(),
             nn.Linear(hidden_size, 1)
         )
@@ -29,7 +29,8 @@ class ChainOfThoughtModule(nn.Module):
             encoder_layer=nn.TransformerEncoderLayer(
                 d_model=hidden_size,
                 nhead=8,
-                dim_feedforward=hidden_size * 4
+                dim_feedforward=hidden_size * 4,
+                batch_first=True
             ),
             num_layers=2
         )
@@ -75,9 +76,11 @@ class ChainOfThoughtModule(nn.Module):
         if steps:
             steps_tensor = torch.stack(steps, dim=1)
             composed_reasoning = self.reasoning_composer(steps_tensor)
+            step_scores_tensor = torch.stack(step_scores) if step_scores else torch.zeros(1, device=hidden_states.device)
         else:
             composed_reasoning = hidden_states
-            
+            step_scores_tensor = torch.zeros(1, device=hidden_states.device)
+        
         # Track reasoning paths if tokenizer provided
         if tokenizer is not None:
             self.reasoning_paths = []
@@ -90,7 +93,7 @@ class ChainOfThoughtModule(nn.Module):
         
         return {
             "reasoning_states": composed_reasoning,
-            "step_scores": torch.stack(step_scores) if step_scores else None,
+            "step_scores": step_scores_tensor,
             "reasoning_paths": self.reasoning_paths,
-            "path_scores": self.path_scores
+            "path_scores": torch.tensor(self.path_scores, device=hidden_states.device) if self.path_scores else torch.zeros(1, device=hidden_states.device)
         } 

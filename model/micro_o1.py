@@ -12,6 +12,7 @@ from .reasoning_token_processor import ReasoningTokenProcessor
 class MicroO1(nn.Module):
     def __init__(self,
                 vocab_size: int,
+                tokenizer,
                 hidden_size: int = 768,
                 num_layers: int = 6,
                 num_heads: int = 12,
@@ -82,6 +83,8 @@ class MicroO1(nn.Module):
         # Reasoning token processor
         self.reasoning_token_processor = ReasoningTokenProcessor(hidden_size, vocab_size)
         
+        self.tokenizer = tokenizer
+        
     def forward(self,
                input_ids: torch.Tensor,
                attention_mask: Optional[torch.Tensor] = None) -> Dict[str, torch.Tensor]:
@@ -103,9 +106,13 @@ class MicroO1(nn.Module):
         reasoning_mask = torch.zeros_like(attention_mask, dtype=torch.float)
         
         # Identify reasoning tokens
+        reasoning_token_ids = [
+            self.tokenizer.convert_tokens_to_ids(token)
+            for token in self.reasoning_token_ids.values()
+        ]
         reasoning_token_mask = torch.isin(
             input_ids,
-            torch.tensor(list(self.reasoning_token_ids.values()))
+            torch.tensor(reasoning_token_ids, device=input_ids.device)
         )
         
         # Process context

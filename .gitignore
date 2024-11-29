@@ -1,2 +1,10 @@
 __pycache__
 venv
+.DS_Store
+*.pyc
+wandb/
+.idea/
+.vscode/
+*.pth
+*.pt
+.env
